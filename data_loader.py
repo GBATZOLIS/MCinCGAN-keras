@@ -146,7 +146,7 @@ class DataLoader():
                 
                 img_B=self.get_random_patch(img_B, patch_dimension = self.target_res)
                 
-                downscaled_img_B = cv.resize(img_B, (self.img_res[0], self.img_res[1]), interpolation = cv.INTER_LINEAR)
+                downscaled_img_B = cv.resize(img_B, (self.img_res[0], self.img_res[1]), interpolation = cv.INTER_CUBIC)
                 downscaled_imgs_B.append(downscaled_img_B)
                 
                 imgs_A.append(img_A)
