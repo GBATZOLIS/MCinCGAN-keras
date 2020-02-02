@@ -23,6 +23,9 @@ from keras.models import Model
 from keras.layers import Input
 from keras.callbacks import ModelCheckpoint, TensorBoard
 
+#visualisation packages
+import matplotlib.pyplot as plt
+
 class CINGAN():
     def __init__(self, img_shape, SRscale=2):
         # Input shape
@@ -47,6 +50,7 @@ class CINGAN():
         self.G2 = G2(img_shape)
         self.blur = blur(img_shape)
         self.SR = SR(img_shape)
+        self.SR.load_weights('pretrained models/128_8.h5')
         self.D2 = D2(self.target_res)
         self.G3 = G3(self.target_res)
 
@@ -112,7 +116,64 @@ class CINGAN():
                             optimizer=optimizer)
         print(self.combined.summary())
         
+        #logger settings
+        self.training = []
+        
+        self.D1_loss = []
+        self.D2_loss = []
+        self.G1_adv = []
+        self.SR_adv = []
+        
+        self.cyc1 = []
+        self.blur1 = []
+        self.tv1 = []
+        
+        self.cyc2 = []
+        self.tv2 = []
+        
+        self.ssim_eval_time = []
+        self.ssim = []
     
+    def log(self,):
+        fig, axs = plt.subplots(2, 3)
+        
+        ax = axs[0,0]
+        ax.plot(self.training, self.D1_loss, label="D1 adv loss")
+        ax.plot(self.training, self.G1_adv, label="G1 adv loss")
+        ax.legend()
+        ax.set_title("Adv losses (1st)")
+        
+        ax = axs[1,0]
+        ax.plot(self.training, self.D2_loss, label="D2 adv loss")
+        ax.plot(self.training, self.SR_adv, label="SR adv loss")
+        ax.legend()
+        ax.set_title("Adv losses (2nd)")
+        
+        ax = axs[0,1]
+        ax.plot(self.training, self.cyc1, label = "cyc1")
+        ax.plot(self.training, self.cyc2, label = "cyc2")
+        ax.legend()
+        ax.set_title("cyclic losses")
+        
+        ax = axs[1,1]
+        ax.plot(self.training, self.tv1, label = "TV 1")
+        ax.plot(self.training, self.tv2, label = "TV 2")
+        ax.set_title("Total Variation losses")
+        
+        ax = axs[0,2]
+        ax.plot(self.training, self.blur1, label = "blur loss 1")
+        ax.legend()
+        ax.set_title("Blur loss 1")
+        fig.savefig("progress/log.png")
+        
+        fig, axs = plt.subplots(1,1)
+        ax=axs
+        ax.plot(self.ssim_eval_time, self.ssim)
+        ax.set_title("SSIM evolution")
+        fig.savefig("progress/ssim_evolution.png")
+        
+        plt.close("all")
+        
     def train(self, epochs, batch_size=10, sample_interval=50):
         #every sample_interval batches, the model is saved and sample images are generated and saved
         
@@ -168,10 +229,28 @@ class CINGAN():
                                                       [valid_D1, img_x, blur_img_x, fake_y, 
                                                        valid_D2, img_x, fake_Y])
                 
+                """update log values"""
+                #save the training point (measured in epochs)
+                self.training.append(round(epoch+batch/self.data_loader.n_batches, 3))
+                #adversarial losses
+                self.D1_loss.append(D1_loss[0])
+                self.D2_loss.append(D2_loss[0])
+                self.G1_adv.append(g_loss[1])
+                self.SR_adv.append(g_loss[5])
+                
+                #1cycleGAN losses
+                self.cyc1.append(g_loss[2])
+                self.blur1.append(g_loss[3])
+                self.tv1.append(g_loss[4])
+                
+                #2nd cycleGan losses
+                self.cyc2.append(g_loss[6])
+                self.tv2.append(g_loss[7])
+        
                 print("[Epoch %d/%d] [Batch %d/%d]--[D1_adv: %.3f] [D2_adv: %.3f] -- [G1_adv: %.3f] [SR_adv: %.3f] [cyc1: %.4f] [cyc2: %.4f]" % (epoch, epochs,
                       batch, self.data_loader.n_batches, D1_loss[0], D2_loss[0], g_loss[1], g_loss[5], g_loss[2], g_loss[6]))
                 
-                if batch % 100 == 0 and batch!=0:
+                if batch % 20 == 0 and batch!=0:
                     """save the model"""
                     model_name="{}_{}.h5".format(epoch, batch)
                     self.SR.save("models/"+model_name)
@@ -184,8 +263,12 @@ class CINGAN():
                     
                     sample_mean_ssim = dynamic_evaluator.objective_test(batch_size=250)
                     print("Sample mean SSIM: -------------------  %05f   -------------------" % (sample_mean_ssim))
+                    self.ssim_eval_time.append(round(epoch+batch/self.data_loader.n_batches, 3))
+                    self.ssim.append(sample_mean_ssim)
                     
-                elapsed_time = time.time() - start_time
+                    self.log()
+                    
+                #elapsed_time = time.time() - start_time
                 
         
 
