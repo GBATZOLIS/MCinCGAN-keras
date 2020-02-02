@@ -256,7 +256,7 @@ class CINGAN():
                     self.SR.save("models/"+model_name)
                     print("Epoch: {} --- Batch: {} ---- saved".format(epoch, batch))
                     
-                    dynamic_evaluator.model = self.SR
+                    dynamic_evaluator.model = [self.G1, self.SR]
                     dynamic_evaluator.epoch = epoch
                     dynamic_evaluator.batch = batch
                     dynamic_evaluator.perceptual_test(5)

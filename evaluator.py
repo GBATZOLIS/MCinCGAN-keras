@@ -41,7 +41,7 @@ class evaluator(object):
         self.target_res = (SRscale*self.img_res[0], SRscale*self.img_res[1])
         
         self.model_name = model_name
-        self.model = model
+        self.model = model #it might be a list of models
         self.epoch = epoch
         self.batch = batch
         self.training_points=[] #training time locations where mean SSIM value on test data has been calculated
@@ -50,7 +50,12 @@ class evaluator(object):
     def perceptual_test(self, batch_size):
         phone_imgs, dslr_imgs = self.data_loader.load_paired_data(batch_size=batch_size)
         
-        fake_dslr_images = self.model.predict(phone_imgs)
+        if isinstance(self.model, list):
+            fake_dslr_images = phone_imgs
+            for i in range(len(self.model)):
+                fake_dslr_images = self.model[i].predict(fake_dslr_images)
+        else:
+            fake_dslr_images = self.model.predict(phone_imgs)
         
         i=0
         for phone, fake_dslr, real_dslr in zip(phone_imgs, fake_dslr_images, dslr_imgs):
@@ -96,7 +101,12 @@ class evaluator(object):
         if baseline:
             fake_dslr_images=phone_imgs
         else:
-            fake_dslr_images = self.model.predict(phone_imgs)
+            if isinstance(self.model, list):
+                fake_dslr_images = phone_imgs
+                for i in range(len(self.model)):
+                    fake_dslr_images = self.model[i].predict(fake_dslr_images)
+            else:
+                fake_dslr_images = self.model.predict(phone_imgs)
         
         batch_size=phone_imgs.shape[0]
         total_ssim=0
