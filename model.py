@@ -8,7 +8,7 @@ Created on Wed Jan 29 21:34:57 2020
 #Implementation of the MCinCGAN paper
 
 #laod required modules
-import time
+import datetime
 import numpy as np
 
 #load functions and classes from other .py files within the repository
@@ -58,7 +58,7 @@ class CINGAN():
         #compile the discriminators
         optimizer = Adam(0.0002)
         self.D1.compile(loss='mse', loss_weights=[1], optimizer=optimizer, metrics=['accuracy'])
-        print(self.D1.summary())
+        #print(self.D1.summary())
         self.D2.compile(loss='mse', loss_weights=[1], optimizer=optimizer, metrics=['accuracy'])
         
         #-------------------------
@@ -67,54 +67,10 @@ class CINGAN():
         #    (combined model)
         #-------------------------
 
-        # Input images from both domains
-        x = Input(shape = img_shape)
-        y = Input(shape = img_shape)
-        Y = Input(shape = self.target_res)
-        
-        #-------------denoising network---------------
-        # Translate images to the other domain
-        fake_y = self.G1(x) #L_tv(1)
-        
-        #cycle-consinstent image
-        cyc_x = self.G2(fake_y) #L_cyc(1)
-        
-        #pass fake_y through the blurring kernel
-        blur_fake_y = self.blur(fake_y) #L_blur(1)
-        
-        #pass fake_y through discriminator D1
-        valid_y = self.D1(fake_y) #L_GAN(1)
-        
-        #------------------SR network----------------------
-        SR_fake_Y = self.SR(fake_y) #L_tv(2)
-        valid_Y = self.D2(SR_fake_Y) #L_GAN(2)
-        cyc_x_2 = self.G3(SR_fake_Y) #L_cyc(2)
-        
-        # Freeze the discriminators
-        self.D1.trainable = False
-        self.D2.trainable = False
-        
-        """loss_relative parameters"""
-        #Denoising network paramaeters
-        w1=10 #relative importance cycle constintency 
-        w2=20 #relative importance of conservation of color distribution
-        w3=1 #relative importance of total variation
-        
-        #1st SR network parameters
-        l1 = 10 #relative importance cycle consistency in 1st cycle
-        l2 = 1 #relative importance of total variation
-
-        # Combined model trains generators to fool discriminators
-        self.combined = Model(inputs=[x, y, Y] ,
-                              outputs=[valid_y, cyc_x, blur_fake_y, fake_y, 
-                                       valid_Y, cyc_x_2, SR_fake_Y])
-        
-        self.combined.compile(loss=['mse', 'mse', 'mse', total_variation, 
-                                    'mse', 'mse', total_variation],
-                            loss_weights=[1, w1, w2, w3, 
-                                          1, l1, l2],
-                            optimizer=optimizer)
-        print(self.combined.summary())
+        self.cyclic1 = self.combined_model(cycle=1)
+        print(self.cyclic1.summary())
+        self.cyclic2 = self.combined_model(cycle=2)
+        print(self.cyclic2.summary())
         
         #logger settings
         self.training = []
@@ -134,6 +90,57 @@ class CINGAN():
         self.ssim_eval_time = []
         self.ssim = []
     
+    def combined_model(self, cycle):
+        if cycle == 1:
+            x = Input(shape = self.img_shape)
+            
+            #-------------denoising network---------------
+            # Translate images to the other domain
+            fake_y = self.G1(x) #L_tv(1)
+            
+            #cycle-consinstent image
+            cyc_x = self.G2(fake_y) #L_cyc(1)
+            
+            #pass fake_y through the blurring kernel
+            blur_fake_y = self.blur(fake_y) #L_blur(1)
+            
+            #pass fake_y through discriminator D1
+            valid_y = self.D1(fake_y) #L_GAN(1)
+            
+            #freeze the discriminator
+            self.D1.trainable = False
+            
+            #Denoising network paramaeters
+            w1=10 #relative importance cycle constintency 
+            w2=20 #relative importance of conservation of color distribution
+            w3=1 #relative importance of total variation
+            
+            model = Model(inputs = [x], outputs = [valid_y, cyc_x, blur_fake_y, fake_y], name = "Cyclic 1")
+            model.compile(loss=['mse', 'mse', 'mse', total_variation], loss_weights=[1, w1, w2, w3], optimizer=Adam(0.0002))
+            
+            return model
+        
+        elif cycle == 2:
+            
+            fake_y = Input(self.img_shape)
+            
+            #------------------SR network----------------------
+            SR_fake_Y = self.SR(fake_y) #L_tv(2)
+            valid_Y = self.D2(SR_fake_Y) #L_GAN(2)
+            cyc_x_2 = self.G3(SR_fake_Y) #L_cyc(2)
+            
+            #1st SR network parameters
+            l1 = 10 #relative importance cycle consistency in 1st cycle
+            l2 = 1 #relative importance of total variation
+            
+            #freeze the discriminator
+            self.D2.trainable = False
+            
+            model = Model(inputs = [fake_y], outputs = [valid_Y, cyc_x_2, SR_fake_Y], name = "cyclic 2")
+            model.compile(loss = ['mse', 'mse', total_variation], loss_weights = [1, l1, l2], optimizer=Adam(0.1*0.0002))
+            
+            return model
+            
     def log(self,):
         fig, axs = plt.subplots(2, 3)
         
@@ -177,7 +184,10 @@ class CINGAN():
     def train(self, epochs, batch_size=10, sample_interval=50):
         #every sample_interval batches, the model is saved and sample images are generated and saved
         
-        start_time = time.time()
+        start_time = datetime.datetime.now()
+        def chop_microseconds(delta):
+            #utility to help avoid printing the microseconds
+            return delta - datetime.timedelta(microseconds=delta.microseconds)
 
         """ Adversarial loss ground truths for patchGAN discriminators"""
         
@@ -224,10 +234,9 @@ class CINGAN():
                 
                 blur_img_x = self.blur.predict(img_x) #passes img_x through the blurring kernel to provide GT.
                 
-                # Train the combined model (all generators)
-                g_loss = self.combined.train_on_batch([img_x, img_y, img_Y], 
-                                                      [valid_D1, img_x, blur_img_x, fake_y, 
-                                                       valid_D2, img_x, fake_Y])
+                # Train the combined models (all generators basically)
+                cyclic_loss_1 = self.cyclic1.train_on_batch([img_x], [valid_D1, img_x, blur_img_x, fake_y])
+                cyclic_loss_2 = self.cyclic2.train_on_batch([fake_y], [valid_D2, img_x, fake_Y])
                 
                 """update log values"""
                 #save the training point (measured in epochs)
@@ -235,22 +244,25 @@ class CINGAN():
                 #adversarial losses
                 self.D1_loss.append(D1_loss[0])
                 self.D2_loss.append(D2_loss[0])
-                self.G1_adv.append(g_loss[1])
-                self.SR_adv.append(g_loss[5])
+                self.G1_adv.append(cyclic_loss_1[1])
+                self.SR_adv.append(cyclic_loss_2[1])
                 
                 #1cycleGAN losses
-                self.cyc1.append(g_loss[2])
-                self.blur1.append(g_loss[3])
-                self.tv1.append(g_loss[4])
+                self.cyc1.append(cyclic_loss_1[2])
+                self.blur1.append(cyclic_loss_1[3])
+                self.tv1.append(cyclic_loss_1[4])
                 
                 #2nd cycleGan losses
-                self.cyc2.append(g_loss[6])
-                self.tv2.append(g_loss[7])
+                self.cyc2.append(cyclic_loss_2[2])
+                self.tv2.append(cyclic_loss_2[3])
         
-                print("[Epoch %d/%d] [Batch %d/%d]--[D1_adv: %.3f] [D2_adv: %.3f] -- [G1_adv: %.3f] [SR_adv: %.3f] [cyc1: %.4f] [cyc2: %.4f]" % (epoch, epochs,
-                      batch, self.data_loader.n_batches, D1_loss[0], D2_loss[0], g_loss[1], g_loss[5], g_loss[2], g_loss[6]))
                 
-                if batch % 20 == 0 and batch!=0:
+                elapsed_time = datetime.datetime.now() - start_time
+                elapsed_time = chop_microseconds(elapsed_time)
+                print("[elapsed time: %s][Epoch %d/%d] [Batch %d/%d] -- [D1_adv: %.3f D2_adv: %.3f] -- [G1_adv: %.3f - SR_adv: %.3f - cyc1: %.4f - cyc2: %.4f]" % (elapsed_time, epoch, epochs,
+                      batch, self.data_loader.n_batches, D1_loss[0], D2_loss[0], cyclic_loss_1[1], cyclic_loss_2[1], cyclic_loss_1[2], cyclic_loss_2[2]))
+                
+                if batch % 20 == 0 and not(batch == 0 and epoch == 0):
                     """save the model"""
                     model_name="{}_{}.h5".format(epoch, batch)
                     self.SR.save("models/"+model_name)
